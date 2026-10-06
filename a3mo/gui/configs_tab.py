@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
 
 from ..model import Config
 from ..sync import check_issues
-from .widgets import DLC_NAMES, WARN_COLOR, ModListEditor, ModTable
+from .widgets import DLC_NAMES, WARN_COLOR, AvailableModsPanel, ModListEditor, ModTable
 
 
 class ConfigsTab(QWidget):
@@ -60,11 +60,20 @@ class ConfigsTab(QWidget):
         top.addWidget(sets_box, 1)
         top.addWidget(dlc_box, 1)
 
-        self.add = ModListEditor("Extra mods (only in this config) — drag to reorder", self.main.all_known_mods,
-                                 reorderable=True)
+        self.add = ModListEditor("Extra mods (only in this config) — drag to reorder", reorderable=True,
+                                 allow_paste=True, before_add=self._unexclude)
         self.add.changed.connect(self._edited)
-        self.exclude = ModListEditor("Excluded mods (removed from included sets)", self._set_mods_of_current)
+        self.add_avail = AvailableModsPanel(target="config", hide_text="Hide mods already in config")
+        self.add_avail.add_requested.connect(self.add.add_ids)
+        self.add_avail.remove_requested.connect(self.add.remove_ids)
+
+        self.exclude = ModListEditor("Excluded mods (removed from included sets)")
         self.exclude.changed.connect(self._edited)
+        self.exclude_avail = AvailableModsPanel(
+            target="exclusions", title="Mods from included sets", add_text="◀  Exclude",
+            hide_text="Hide already excluded", show_unassigned=False)
+        self.exclude_avail.add_requested.connect(self.exclude.add_ids)
+        self.exclude_avail.remove_requested.connect(self.exclude.remove_ids)
 
         self.summary = QLabel()
         self.resolved = ModTable(extra_header="Source", numbered=True)
@@ -88,8 +97,14 @@ class ConfigsTab(QWidget):
 
         self.pages = QTabWidget()
         self.pages.addTab(resolved_page, "Resulting preset")
-        self.pages.addTab(self.add, "Extra mods")
-        self.pages.addTab(self.exclude, "Excluded")
+        for editor, panel, label in ((self.add, self.add_avail, "Extra mods"),
+                                     (self.exclude, self.exclude_avail, "Excluded")):
+            page = QSplitter()
+            page.addWidget(editor)
+            page.addWidget(panel)
+            page.setSizes([450, 450])
+            page.setChildrenCollapsible(False)
+            self.pages.addTab(page, label)
 
         right = QWidget()
         r = QVBoxLayout(right)
@@ -173,8 +188,27 @@ class ConfigsTab(QWidget):
         self.exclude.bind(cfg.exclude if cfg else None, self.main.catalog)
         self._refresh_resolved()
 
+    def _refresh_available(self) -> None:
+        cfg, lib, cat = self.current(), self.main.lib, self.main.catalog
+        usage: dict[str, list[str]] = {}
+        for name, s in lib.sets.items():
+            for m in s.mods:
+                usage.setdefault(m, []).append(name)
+        by_name = lambda ids: sorted(ids, key=lambda m: cat.name(m).lower())  # noqa: E731
+        in_config = (set(lib.resolve(self.current_name())) | set(cfg.add)) if cfg else None
+        self.add_avail.set_context(by_name(self.main.all_known_mods()), in_config, usage, cat)
+        self.exclude_avail.set_context(by_name(self._set_mods_of_current()), cfg.exclude if cfg else None, usage, cat)
+
+    def _unexclude(self, ids: list[str]) -> None:
+        """A mod added as an extra must not stay excluded (exclude would win)."""
+        cfg = self.current()
+        if cfg and set(ids) & set(cfg.exclude):
+            cfg.exclude[:] = [m for m in cfg.exclude if m not in set(ids)]
+            self.exclude.refresh()
+
     def _refresh_resolved(self) -> None:
         cfg = self.current()
+        self._refresh_available()
         if not cfg:
             self.resolved.set_mods([], self.main.catalog)
             self.summary.setText("")

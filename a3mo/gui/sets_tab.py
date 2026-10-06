@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..model import ModSet
-from .widgets import AvailableModsPanel, ModPickerDialog, ModTable
+from .widgets import AvailableModsPanel, ModTable, ask_mod_ids
 
 
 class SetsTab(QWidget):
@@ -176,16 +176,8 @@ class SetsTab(QWidget):
             self.main.mark_dirty()
 
     def _paste(self) -> None:
-        s = self.current()
-        if not s:
-            return
-        dlg = ModPickerDialog(self.main.catalog, [], title=f"Add mods to '{self.current_name()}'", parent=self)
-        dlg.list.hide()
-        dlg.filter.hide()
-        dlg.paste.setMaximumHeight(16777215)
-        dlg.resize(560, 300)
-        if dlg.exec():
-            self._add_mods(dlg.result_ids())
+        if self.current():
+            self._add_mods(ask_mod_ids(self, f"Add mods to '{self.current_name()}'"))
 
     def _notes_changed(self) -> None:
         s = self.current()

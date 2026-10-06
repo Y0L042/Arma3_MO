@@ -8,7 +8,7 @@ from PySide6.QtCore import QItemSelectionModel, Qt, QUrl, Signal
 from PySide6.QtGui import QBrush, QColor, QCursor, QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QMenu, QToolTip, QDialog, QDialogButtonBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
-    QListWidget, QListWidgetItem, QPlainTextEdit, QPushButton, QTableWidget, QTableWidgetItem,
+    QPlainTextEdit, QPushButton, QTableWidget, QTableWidgetItem,
     QVBoxLayout, QWidget,
 )
 
@@ -281,26 +281,32 @@ class ModTable(QTableWidget):
 
 
 class AvailableModsPanel(QWidget):
-    """Always-visible list of all known mods, for quickly adding mods to a set."""
+    """Always-visible list of mods to pick from, next to a list being edited.
+
+    ``target`` names that list in labels ("set", "config", …); ``title``, ``add_text`` and
+    ``hide_text`` override the defaults. ``show_unassigned`` toggles the "Not in any set" filter.
+    """
 
     add_requested = Signal(list)
-    remove_requested = Signal(list)  # mods dragged back here from the set table
+    remove_requested = Signal(list)  # mods dragged back here from the edited list
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, target: str = "set", title: str = "Available mods",
+                 add_text: str | None = None, hide_text: str | None = None, show_unassigned: bool = True):
         super().__init__(parent)
-        self.filter = QLineEdit(placeholderText="Filter available mods… (name, id, set)   Enter = add if one match")
+        self.filter = QLineEdit(placeholderText="Filter… (name, id, set)   Enter = add if one match")
         self.filter.setClearButtonEnabled(True)
-        self.hide_in_set = QCheckBox("Hide mods already in set")
+        self.hide_in_set = QCheckBox(hide_text or f"Hide mods already in {target}")
         self.hide_in_set.setChecked(True)
         self.installed_only = QCheckBox("Installed only")
         self.unassigned_only = QCheckBox("Not in any set")
+        self.unassigned_only.setVisible(show_unassigned)
         self.table = ModTable(extra_header="In sets", open_on_activate=False, drag=True, accept_drops=True)
-        self.table.setToolTip("Double-click, Enter or drag onto the set to add")
+        self.table.setToolTip(f"Double-click, Enter or drag onto the {target} to add")
         # Status is shown by colour and ID in the tooltip; hidden columns are still filterable.
         self.table.setColumnHidden(self.table.col["Status"], True)
         self.table.setColumnHidden(self.table.col["ID"], True)
         self.count = QLabel()
-        add = QPushButton("◀  Add to set")
+        add = QPushButton(add_text or f"◀  Add to {target}")
         add.clicked.connect(lambda: self._emit_add(self.table.selected_ids()))
         self.table.activated.connect(self._emit_add)
         self.table.dropped.connect(self.remove_requested)
@@ -318,7 +324,8 @@ class AvailableModsPanel(QWidget):
         bottom.addWidget(self.count, 1)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.addWidget(QLabel("<b>Available mods</b>"))
+        self.title = QLabel(f"<b>{title}</b>")
+        lay.addWidget(self.title)
         lay.addWidget(self.filter)
         lay.addLayout(opts)
         lay.addWidget(self.table, 1)
@@ -370,109 +377,97 @@ class AvailableModsPanel(QWidget):
             self.table.selectRow(next(r for r in range(self.table.rowCount()) if not self.table.isRowHidden(r)))
 
 
-class ModPickerDialog(QDialog):
-    """Pick mods from the known catalog, or paste ids / Workshop URLs."""
-
-    def __init__(self, catalog: ModCatalog, candidates: list[str], title="Add mods", parent=None):
-        super().__init__(parent)
-        self.setWindowTitle(title)
-        self.resize(640, 560)
-        self.filter = QLineEdit(placeholderText="Filter by name or id…")
-        self.list = QListWidget()
-        self.list.setSelectionMode(QAbstractItemView.ExtendedSelection)
-        for mid in sorted(candidates, key=lambda m: catalog.name(m).lower()):
-            info = catalog.info(mid)
-            item = QListWidgetItem(f"{info.name}   ({mid})" + ("" if info.installed else "   [not installed]"))
-            item.setData(ID_ROLE, mid)
-            if not info.installed:
-                item.setForeground(QBrush(WARN_COLOR))
-            self.list.addItem(item)
-        self.paste = QPlainTextEdit()
-        self.paste.setPlaceholderText("…or paste one per line: Workshop URL, workshop id, steam:ID, or local @mod path")
-        self.paste.setMaximumHeight(90)
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        self.filter.textChanged.connect(self._apply_filter)
-        self.list.itemDoubleClicked.connect(lambda _: self.accept())
-
-        lay = QVBoxLayout(self)
-        lay.addWidget(self.filter)
-        lay.addWidget(self.list, 1)
-        lay.addWidget(self.paste)
-        lay.addWidget(buttons)
-
-    def _apply_filter(self, text: str) -> None:
-        t = text.lower()
-        for i in range(self.list.count()):
-            item = self.list.item(i)
-            item.setHidden(bool(t) and t not in item.text().lower())
-
-    def result_ids(self) -> list[str]:
-        ids = [i.data(ID_ROLE) for i in self.list.selectedItems() if not i.isHidden()]
-        return ids + [m for m in parse_mod_ids(self.paste.toPlainText()) if m not in ids]
+def ask_mod_ids(parent, title: str = "Add mods") -> list[str]:
+    """Dialog to paste Workshop URLs / ids / local @mod paths, one per line."""
+    dlg = QDialog(parent)
+    dlg.setWindowTitle(title)
+    dlg.resize(560, 300)
+    text = QPlainTextEdit()
+    text.setPlaceholderText("One per line: Workshop URL, workshop id, steam:ID, or local @mod folder path")
+    buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+    buttons.accepted.connect(dlg.accept)
+    buttons.rejected.connect(dlg.reject)
+    lay = QVBoxLayout(dlg)
+    lay.addWidget(text)
+    lay.addWidget(buttons)
+    return parse_mod_ids(text.toPlainText()) if dlg.exec() else []
 
 
 class ModListEditor(QWidget):
-    """A titled ModTable bound to a mutable list of ids, with Add/Remove buttons."""
+    """A titled ModTable bound to a mutable list of ids; pairs with an AvailableModsPanel.
+
+    Mods arrive via ``add_ids`` (panel / drops from another ModTable / paste) and leave via
+    ``remove_ids`` (Remove button, Delete key, dragging back to the panel).
+    ``before_add`` lets the owner react to additions (e.g. un-exclude a mod).
+    """
 
     changed = Signal()
 
-    def __init__(self, title: str, candidates: Callable[[], list[str]], parent=None, reorderable: bool = False):
+    def __init__(self, title: str, parent=None, reorderable: bool = False, allow_paste: bool = False,
+                 before_add: Callable[[list[str]], None] | None = None):
         super().__init__(parent)
         self._ids: list[str] | None = None
         self._catalog: ModCatalog | None = None
-        self._candidates = candidates
+        self._before_add = before_add
         self.title = QLabel(f"<b>{title}</b>")
-        self.table = ModTable(reorderable=reorderable)
+        self.table = ModTable(reorderable=reorderable, drag=True, accept_drops=True)
+        self.table.setColumnHidden(self.table.col["Status"], True)
+        self.table.setColumnHidden(self.table.col["ID"], True)
         self.table.reordered.connect(self._reordered)
-        self.table.delete_pressed.connect(lambda _ids: self._remove())
-        self.add_btn = QPushButton("Add…")
-        self.remove_btn = QPushButton("Remove")
-        self.add_btn.clicked.connect(self._add)
-        self.remove_btn.clicked.connect(self._remove)
-        top = QHBoxLayout()
-        top.addWidget(self.title)
-        top.addStretch(1)
-        top.addWidget(self.add_btn)
-        top.addWidget(self.remove_btn)
+        self.table.dropped.connect(self.add_ids)
+        self.table.delete_pressed.connect(self.remove_ids)
+        self.filter = QLineEdit(placeholderText="Filter…")
+        self.filter.setClearButtonEnabled(True)
+        self.filter.textChanged.connect(self.table.apply_filter)
+        self.paste_btn = QPushButton("Paste ids / URLs…")
+        self.paste_btn.setToolTip("Add mods that aren't in the list (Workshop URLs, ids, local @mod paths)")
+        self.paste_btn.clicked.connect(lambda: self.add_ids(ask_mod_ids(self, "Add mods")))
+        self.paste_btn.setVisible(allow_paste)
+        self.remove_btn = QPushButton("Remove  ▶")
+        self.remove_btn.clicked.connect(lambda: self.remove_ids(self.table.selected_ids()))
+        bottom = QHBoxLayout()
+        bottom.addWidget(self.paste_btn)
+        bottom.addStretch(1)
+        bottom.addWidget(self.remove_btn)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.addLayout(top)
-        lay.addWidget(self.table)
+        lay.addWidget(self.title)
+        lay.addWidget(self.filter)
+        lay.addWidget(self.table, 1)
+        lay.addLayout(bottom)
 
     def bind(self, ids: list[str] | None, catalog: ModCatalog) -> None:
         self._ids, self._catalog = ids, catalog
         self.setEnabled(ids is not None)
         self.refresh()
 
+    def ids(self) -> list[str]:
+        return list(self._ids or [])
+
     def refresh(self) -> None:
         if self._catalog is not None:
             self.table.set_mods(self._ids or [], self._catalog)
 
-    def _reordered(self, order: list[str]) -> None:
-        if self._ids is not None and sorted(order) == sorted(self._ids):
-            self._ids[:] = order
+    def add_ids(self, ids: list[str]) -> None:
+        if self._ids is None:
+            return
+        new = [m for m in dict.fromkeys(ids) if m not in self._ids]
+        if new:
+            if self._before_add:
+                self._before_add(new)
+            self._ids.extend(new)
             self.refresh()
             self.changed.emit()
 
-    def _add(self) -> None:
-        if self._ids is None:
-            return
-        current = set(self._ids)
-        dlg = ModPickerDialog(self._catalog, [m for m in self._candidates() if m not in current], parent=self)
-        if dlg.exec():
-            new = [m for m in dlg.result_ids() if m not in current]
-            if new:
-                self._ids.extend(new)
-                self.refresh()
-                self.changed.emit()
-
-    def _remove(self) -> None:
-        if self._ids is None:
-            return
-        drop = set(self.table.selected_ids())
-        if drop:
+    def remove_ids(self, ids: list[str]) -> None:
+        drop = set(ids)
+        if self._ids is not None and drop & set(self._ids):
             self._ids[:] = [m for m in self._ids if m not in drop]
+            self.refresh()
+            self.changed.emit()
+
+    def _reordered(self, order: list[str]) -> None:
+        if self._ids is not None and sorted(order) == sorted(self._ids):
+            self._ids[:] = order
             self.refresh()
             self.changed.emit()

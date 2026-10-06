@@ -23,7 +23,8 @@ Run `run.bat` (it creates `.venv` on first run), or `.venv\Scripts\python -m a3m
    **Order:** a config's load order is its included sets in order, then its extra mods. Drag rows to reorder
    a set's mods or a config's extra mods (or Ctrl+↑/↓, or right-click → move/sort by name). Drag the
    included sets in a config to order them. Reordering works while the list is sorted by **#** with no filter.
-   In **Configs → Resulting preset**, use *Move selected to set…* to promote a
+   In **Configs**, the *Extra mods* and *Excluded* pages have the same side panel. Extra mods can come from
+   all known mods; exclusions can only come from the config's included sets. In **Configs → Resulting preset**, use *Move selected to set…* to promote a
    config's extra mods into a shared set.
 4. **Generate presets** (Ctrl+G) shows a dry run (new/changed, +/− mods, warnings), then writes the files.
    Restart the launcher if it was open.

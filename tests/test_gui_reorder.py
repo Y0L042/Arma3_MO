@@ -96,3 +96,38 @@ def test_configs_tab_set_order(app, tmp_path):
     app.processEvents()
     assert w.lib.configs["X"].sets == ["A", "B"]
     assert w.lib.resolve("X") == ["steam:1", "steam:2"] and w.dirty
+
+
+def test_configs_tab_available_panels(app, tmp_path):
+    from a3mo.gui.app import MainWindow
+    from a3mo.model import Config, Library, ModSet
+    lib = Library()
+    lib.settings.launcher_dir = str(tmp_path)
+    lib.sets = {"A": ModSet(["steam:1", "steam:2"]), "B": ModSet(["steam:3"])}
+    lib.configs["X"] = Config(sets=["A"], add=["steam:9"], exclude=["steam:2"])
+    lib.save(tmp_path / "lib.json")
+    w = MainWindow(tmp_path / "lib.json")
+    tab = w.configs_tab
+    cfg = w.lib.configs["X"]
+
+    # Extra mods panel: everything known, minus what the config already has.
+    shown = set(tab.add_avail.table.visible_ids())
+    assert {"steam:2", "steam:3"} <= shown and not ({"steam:1", "steam:9"} & shown)
+    # Exclude panel: only mods from included sets, minus already excluded.
+    assert tab.exclude_avail.table.visible_ids() == ["steam:1"]
+
+    tab.add_avail.add_requested.emit(["steam:3"])
+    assert cfg.add == ["steam:9", "steam:3"] and "steam:3" not in tab.add_avail.table.visible_ids()
+
+    # Adding an excluded mod as an extra un-excludes it.
+    tab.add_avail.add_requested.emit(["steam:2"])
+    assert "steam:2" in cfg.add and cfg.exclude == [] and "steam:2" in w.lib.resolve("X")
+
+    tab.exclude_avail.add_requested.emit(["steam:1"])
+    assert cfg.exclude == ["steam:1"] and "steam:1" not in w.lib.resolve("X")
+    assert "steam:1" in tab.add_avail.table.visible_ids()  # excluded -> no longer in the config
+
+    # Dragging back onto the panel removes.
+    tab.exclude_avail.remove_requested.emit(["steam:1"])
+    tab.add_avail.remove_requested.emit(["steam:3"])
+    assert cfg.exclude == [] and cfg.add == ["steam:9", "steam:2"] and w.dirty
