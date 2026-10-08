@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
 
 from ..model import Config
 from ..sync import check_issues
-from .widgets import DLC_NAMES, WARN_COLOR, AvailableModsPanel, ModListEditor, ModTable
+from .widgets import DLC_NAMES, WARN_COLOR, AvailableModsPanel, ModListEditor, ModTable, TagFilterButton
 
 
 class ConfigsTab(QWidget):
@@ -85,9 +85,14 @@ class ConfigsTab(QWidget):
         mv = QPushButton("Move selected to set…")
         mv.setToolTip("Moves extra mods into a shared set (which also adds them to every config using that set)")
         mv.clicked.connect(self._move_to_set)
+        self.resolved_tag_filter = TagFilterButton()
+        self.resolved_tag_filter.changed.connect(self.resolved.set_tag_filter)
         resolved_page = QWidget()
         rl = QVBoxLayout(resolved_page)
-        rl.addWidget(self.summary)
+        top_row = QHBoxLayout()
+        top_row.addWidget(self.summary, 1)
+        top_row.addWidget(self.resolved_tag_filter)
+        rl.addLayout(top_row)
         rl.addWidget(self.resolved, 1)
         rb = QHBoxLayout()
         rb.addStretch(1)
@@ -211,6 +216,7 @@ class ConfigsTab(QWidget):
         self._refresh_available()
         if not cfg:
             self.resolved.set_mods([], self.main.catalog)
+            self.resolved_tag_filter.set_mods([], self.main.catalog)
             self.summary.setText("")
             return
         lib, cat = self.main.lib, self.main.catalog
@@ -224,6 +230,7 @@ class ConfigsTab(QWidget):
         missing, deps = check_issues(mods, cat)
         warn = {m: "needs " + ", ".join(cat.name(d) for d in ds) for m, ds in deps.items()}
         self.resolved.set_mods(mods, cat, extra=source, warn=warn)
+        self.resolved_tag_filter.set_mods(mods, cat)
         parts = [f"<b>{len(mods)}</b> mods"]
         if missing:
             parts.append(f"<span style='color:{WARN_COLOR.name()}'>{len(missing)} not installed</span>")

@@ -8,7 +8,7 @@ from pathlib import Path
 from . import BACKUP_DIR, LIBRARY_PATH
 from .launcher_data import ModCatalog
 from .model import Library
-from .sync import apply_generate, import_presets, launcher_running, plan_generate
+from .sync import apply_generate, find_moved_local_mods, import_presets, launcher_running, plan_generate
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -33,6 +33,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Imported {len(names)} preset(s) into {args.library}")
     if args.generate:
         catalog = ModCatalog.load(lib.settings.launcher_path)
+        if moved := find_moved_local_mods(lib.all_mod_ids(), catalog):
+            lib.replace_mods(moved)
+            if not args.dry_run:
+                lib.save(args.library)
+            print(f"Updated {len(moved)} moved local mod folder(s)")
         plan = plan_generate(lib, catalog, presets_dir)
         plan.include_reordered = not args.ignore_order
         for item in plan.items:

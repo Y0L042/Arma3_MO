@@ -81,6 +81,21 @@ class Library:
         for cfg in self.configs.values():
             cfg.sets = [s for s in cfg.sets if s != name]
 
+    def all_mod_ids(self) -> list[str]:
+        ids = [m for s in self.sets.values() for m in s.mods]
+        ids += [m for c in self.configs.values() for m in c.add + c.exclude]
+        return ordered_unique(ids)
+
+    def replace_mods(self, mapping: dict[str, str]) -> None:
+        """Swap mod ids everywhere (e.g. a local mod whose folder moved), keeping positions."""
+        def swap(ids: list[str]) -> list[str]:
+            return ordered_unique(mapping.get(m, m) for m in ids)
+        for s in self.sets.values():
+            s.mods[:] = swap(s.mods)
+        for c in self.configs.values():
+            c.add[:] = swap(c.add)
+            c.exclude[:] = swap(c.exclude)
+
     def rename_config(self, old: str, new: str) -> None:
         if new in self.configs:
             raise ValueError(f"Config '{new}' already exists")

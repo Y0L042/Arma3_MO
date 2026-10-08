@@ -26,10 +26,20 @@ Run `run.bat` (it creates `.venv` on first run), or `.venv\Scripts\python -m a3m
    In **Configs**, the *Extra mods* and *Excluded* pages have the same side panel. Extra mods can come from
    all known mods; exclusions can only come from the config's included sets. In **Configs → Resulting preset**, use *Move selected to set…* to promote a
    config's extra mods into a shared set.
+   **Type filter:** the *Type ▾* button next to each mod list filters by Steam Workshop tags (Terrain,
+   Weapon, Mechanics, …; a mod shows if it has any ticked tag). Typing a tag in the text filter also works.
+   Tags are downloaded from the Workshop in the background for mods not seen before and cached in
+   `data\workshop_cache.json`, together with each mod's Workshop title, which names mods the launcher
+   doesn't know (not subscribed); the toolbar's *Refresh Workshop info* re-downloads all. Without a network
+   connection the cached tags are used, and mods without tags are under *(untagged)*.
 4. **Generate presets** (Ctrl+G) shows a dry run (new/changed, +/− mods, warnings), then writes the files.
    Restart the launcher if it was open.
 
-Warnings (orange) mark mods that are not installed according to the launcher's `Steam.json`, local mod
+Mods come from the launcher's `Steam.json`, plus any mod in the `!Workshop` folder it doesn't list yet (the
+launcher updates that file only now and then, so mods subscribed while it runs would otherwise be missing).
+A local mod's id is its folder path. If local mod folders were moved, the organizer finds them by folder
+name and updates the library automatically; generate presets afterwards.
+Warnings (orange) mark mods that are not installed according to that data, local mod
 folders that don't exist, and mods missing a Workshop dependency. They never block generating.
 
 Headless: `python -m a3mo --import`, `python -m a3mo --generate [--dry-run] [--ignore-order] [--presets-dir DIR]`.

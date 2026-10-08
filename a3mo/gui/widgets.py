@@ -8,11 +8,11 @@ from PySide6.QtCore import QItemSelectionModel, Qt, QUrl, Signal
 from PySide6.QtGui import QBrush, QColor, QCursor, QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QMenu, QToolTip, QDialog, QDialogButtonBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
-    QPlainTextEdit, QPushButton, QTableWidget, QTableWidgetItem,
+    QPlainTextEdit, QPushButton, QTableWidget, QTableWidgetItem, QToolButton,
     QVBoxLayout, QWidget,
 )
 
-from ..launcher_data import ModCatalog
+from ..launcher_data import ModCatalog, local_mod_id
 
 DLC_NAMES = {
     1021790: "Contact",
@@ -27,6 +27,7 @@ DLC_NAMES = {
 
 WARN_COLOR = QColor("#d9822b")
 ID_ROLE = Qt.UserRole
+UNTAGGED = "(untagged)"  # pseudo-tag for the type filter: mods without Workshop tags
 
 
 def parse_mod_ids(text: str) -> list[str]:
@@ -42,13 +43,12 @@ def parse_mod_ids(text: str) -> list[str]:
             out.append(f"steam:{m.group(1)}")
         elif line.lower().startswith("local:") or re.match(r"^[A-Za-z]:[\\/]", line):
             path = line.split(":", 1)[1] if line.lower().startswith("local:") else line
-            path = path.replace("/", "\\").upper()
-            out.append("local:" + path.rstrip("\\") + "\\")
+            out.append(local_mod_id(path))
     return out
 
 
 class ModTable(QTableWidget):
-    """Read-only table of mods: [#] | Name | Status | [extra column] | ID.
+    """Read-only table of mods: [#] | Name | Status | [extra column] | [Tags] | ID.
 
     Emits ``activated`` (double-click / Enter), ``delete_pressed`` (Delete key) and
     ``dropped`` (ids dragged in from another ModTable). By default activating a row
@@ -59,6 +59,9 @@ class ModTable(QTableWidget):
     or sort by name from the context menu; the new order is emitted via ``reordered``.
     Reordering needs the view sorted by "#" with no filter, so what you see is the
     real order.
+
+    ``show_tags`` adds a column with the mod's Workshop type tags; ``set_tag_filter``
+    shows only mods having any of the given tags (see ``TagFilterButton``).
     """
 
     activated = Signal(list)
@@ -68,11 +71,13 @@ class ModTable(QTableWidget):
 
     def __init__(self, extra_header: str | None = None, parent=None, open_on_activate: bool = True,
                  drag: bool = False, accept_drops: bool = False, numbered: bool = False,
-                 reorderable: bool = False):
+                 reorderable: bool = False, show_tags: bool = False):
         self.extra_header = extra_header
+        self.show_tags = show_tags
         self.reorderable = reorderable
         self.numbered = numbered or reorderable
-        headers = (["#"] if self.numbered else []) + ["Name", "Status"] + ([extra_header] if extra_header else []) + ["ID"]
+        headers = (["#"] if self.numbered else []) + ["Name", "Status"] + ([extra_header] if extra_header else []) + \
+            (["Tags"] if show_tags else []) + ["ID"]
         self.col = {h: i for i, h in enumerate(headers)}
         super().__init__(0, len(headers), parent)
         self.setHorizontalHeaderLabels(headers)
@@ -94,7 +99,7 @@ class ModTable(QTableWidget):
         if self.numbered:
             h.setSectionResizeMode(self.col["#"], QHeaderView.Fixed)
             self.setColumnWidth(self.col["#"], self.fontMetrics().horizontalAdvance("9999") + 26)
-        widths = {"ID": 150, extra_header: 130} if extra_header else {"ID": 150}
+        widths = {"ID": 150} | ({extra_header: 130} if extra_header else {}) | ({"Tags": 160} if show_tags else {})
         for name, width in widths.items():
             h.setSectionResizeMode(self.col[name], QHeaderView.Interactive)
             self.setColumnWidth(self.col[name], width)
@@ -115,6 +120,7 @@ class ModTable(QTableWidget):
         self.cellDoubleClicked.connect(lambda r, _c: self.activated.emit([self.item(r, 0).data(ID_ROLE)]))
         self._catalog: ModCatalog | None = None
         self._filter = ""
+        self._tags: set[str] = set()
 
     def set_mods(self, ids: list[str], catalog: ModCatalog, extra: dict[str, str] | None = None,
                  warn: dict[str, str] | None = None) -> None:
@@ -131,10 +137,12 @@ class ModTable(QTableWidget):
             if warn and mid in warn:
                 status = warn[mid] if info.installed else f"{status}; {warn[mid]}"
             extra_text = (extra or {}).get(mid, "")
+            tags_text = ", ".join(info.tags)
             cells = ([row + 1] if self.numbered else []) + [info.name, status] + \
-                ([extra_text] if self.extra_header else []) + [mid]
+                ([extra_text] if self.extra_header else []) + ([tags_text] if self.show_tags else []) + [mid]
             bad = not info.installed or bool(warn and mid in warn)
-            tip = f"{info.name}\n{mid}\n{status}" + (f"\n{self.extra_header}: {extra_text}" if extra_text else "")
+            tip = f"{info.name}\n{mid}\n{status}" + (f"\n{self.extra_header}: {extra_text}" if extra_text else "") \
+                + (f"\nTags: {tags_text}" if tags_text else "")
             if self.reorderable:
                 tip += "\n\nDrag to reorder (Ctrl+Up/Down)"
             for col, value in enumerate(cells):
@@ -153,12 +161,19 @@ class ModTable(QTableWidget):
                 sel.select(self.model().index(r, 0), QItemSelectionModel.Select | QItemSelectionModel.Rows)
 
     def apply_filter(self, text: str) -> None:
+        """Text filter: matches any column (hidden ones too) or a tag. Combined with the tag filter."""
         self._filter = text
         t = text.lower()
         for r in range(self.rowCount()):
-            hide = bool(t) and not any(t in self.item(r, c).text().lower() for c in range(self.columnCount())
-                                       if c != self.col.get("#"))
-            self.setRowHidden(r, hide)
+            tags = self._catalog.tags(self.item(r, 0).data(ID_ROLE)) if self._catalog else []
+            text_ok = not t or any(t in self.item(r, c).text().lower() for c in range(self.columnCount())
+                                   if c != self.col.get("#")) or any(t in g.lower() for g in tags)
+            tag_ok = not self._tags or bool(self._tags & set(tags)) or (UNTAGGED in self._tags and not tags)
+            self.setRowHidden(r, not (text_ok and tag_ok))
+
+    def set_tag_filter(self, tags: set[str]) -> None:
+        self._tags = set(tags)
+        self.apply_filter(self._filter)
 
     def visible_ids(self) -> list[str]:
         return [self.item(r, 0).data(ID_ROLE) for r in range(self.rowCount()) if not self.isRowHidden(r)]
@@ -181,11 +196,11 @@ class ModTable(QTableWidget):
     # --- reordering ---------------------------------------------------------
     def in_order_view(self) -> bool:
         h = self.horizontalHeader()
-        return (self.reorderable and not self._filter and h.sortIndicatorSection() == self.col["#"]
+        return (self.reorderable and not self._filter and not self._tags and h.sortIndicatorSection() == self.col["#"]
                 and h.sortIndicatorOrder() == Qt.AscendingOrder)
 
     def _order_hint(self) -> None:
-        QToolTip.showText(QCursor.pos(), "To reorder, sort by the # column (ascending) and clear the filter.", self)
+        QToolTip.showText(QCursor.pos(), "To reorder, sort by the # column (ascending) and clear the filters.", self)
 
     def move_selected(self, step: int) -> None:
         if not self.in_order_view():
@@ -280,6 +295,93 @@ class ModTable(QTableWidget):
             QDesktopServices.openUrl(QUrl(url))
 
 
+class _StickyMenu(QMenu):
+    """Menu that stays open while checkable entries are toggled."""
+
+    def mouseReleaseEvent(self, event) -> None:
+        action = self.activeAction()
+        if action and action.isCheckable() and action.isEnabled():
+            action.trigger()
+            return
+        super().mouseReleaseEvent(event)
+
+
+class TagFilterButton(QToolButton):
+    """"Type ▾" drop-down of Workshop tags with counts; emits ``changed`` with the ticked tags.
+
+    Pair with ``ModTable.set_tag_filter``. A mod matches if it has any ticked tag.
+    """
+
+    changed = Signal(object)  # set[str]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setPopupMode(QToolButton.InstantPopup)
+        self.setToolTip("Filter by Steam Workshop type tags (shows mods with any ticked tag)")
+        self._menu = _StickyMenu(self)
+        self.setMenu(self._menu)
+        self._selected: set[str] = set()
+        self._clear = None
+        self.set_mods([], None)
+
+    def selected(self) -> set[str]:
+        return set(self._selected)
+
+    def set_mods(self, ids: list[str], catalog: ModCatalog | None) -> None:
+        """Rebuild the menu from the tags of ``ids``, keeping ticked tags."""
+        counts = catalog.tag_counts(ids) if catalog else {}
+        untagged = sum(1 for m in ids if not catalog.tags(m)) if catalog else 0
+        if untagged:
+            counts[UNTAGGED] = untagged
+        for tag in self._selected - counts.keys():
+            counts[tag] = 0
+        self._menu.clear()
+        self._clear = self._menu.addAction("Clear", self.clear)
+        self._clear.setEnabled(bool(self._selected))
+        self._menu.addSeparator()
+        if not counts:
+            self._menu.addAction("No tags (fetched from the Workshop)").setEnabled(False)
+        for tag, n in counts.items():
+            a = self._menu.addAction(f"{tag} ({n})".replace("&", "&&"))
+            a.setCheckable(True)
+            a.setChecked(tag in self._selected)
+            a.setData(tag)
+            a.toggled.connect(lambda on, t=tag: self._toggle(t, on))
+        self._update_text()
+
+    def set_selected(self, tags: set[str]) -> None:
+        for a in self._menu.actions():
+            if a.isCheckable():
+                a.setChecked(a.data() in tags)  # emits changed via _toggle
+
+    def clear(self) -> None:
+        if not self._selected:
+            return
+        self._selected.clear()
+        for a in self._menu.actions():
+            a.blockSignals(True)
+            a.setChecked(False)
+            a.blockSignals(False)
+        self._changed()
+
+    def _toggle(self, tag: str, on: bool) -> None:
+        if on:
+            self._selected.add(tag)
+        else:
+            self._selected.discard(tag)
+        self._changed()
+
+    def _changed(self) -> None:
+        self._clear.setEnabled(bool(self._selected))
+        self._update_text()
+        self.changed.emit(self.selected())
+
+    def _update_text(self) -> None:
+        tags = sorted(self._selected, key=str.lower)
+        label = "Type" if not tags else f"Type: {', '.join(tags[:2])}" + (f" +{len(tags) - 2}" if len(tags) > 2 else "")
+        self.setText(label.replace("&", "&&") + "  ▾")
+
+
 class AvailableModsPanel(QWidget):
     """Always-visible list of mods to pick from, next to a list being edited.
 
@@ -293,14 +395,16 @@ class AvailableModsPanel(QWidget):
     def __init__(self, parent=None, target: str = "set", title: str = "Available mods",
                  add_text: str | None = None, hide_text: str | None = None, show_unassigned: bool = True):
         super().__init__(parent)
-        self.filter = QLineEdit(placeholderText="Filter… (name, id, set)   Enter = add if one match")
+        self.filter = QLineEdit(placeholderText="Filter… (name, id, set, tag)   Enter = add if one match")
         self.filter.setClearButtonEnabled(True)
         self.hide_in_set = QCheckBox(hide_text or f"Hide mods already in {target}")
         self.hide_in_set.setChecked(True)
         self.installed_only = QCheckBox("Installed only")
         self.unassigned_only = QCheckBox("Not in any set")
         self.unassigned_only.setVisible(show_unassigned)
-        self.table = ModTable(extra_header="In sets", open_on_activate=False, drag=True, accept_drops=True)
+        self.tag_filter = TagFilterButton()
+        self.table = ModTable(extra_header="In sets", open_on_activate=False, drag=True, accept_drops=True,
+                              show_tags=True)
         self.table.setToolTip(f"Double-click, Enter or drag onto the {target} to add")
         # Status is shown by colour and ID in the tooltip; hidden columns are still filterable.
         self.table.setColumnHidden(self.table.col["Status"], True)
@@ -311,11 +415,13 @@ class AvailableModsPanel(QWidget):
         self.table.activated.connect(self._emit_add)
         self.table.dropped.connect(self.remove_requested)
         self.filter.textChanged.connect(self._filter_changed)
+        self.tag_filter.changed.connect(self._tags_changed)
         self.filter.returnPressed.connect(self._enter_in_filter)
         for cb in (self.hide_in_set, self.installed_only, self.unassigned_only):
             cb.toggled.connect(self.refresh)
 
         opts = QHBoxLayout()
+        opts.addWidget(self.tag_filter)
         for cb in (self.hide_in_set, self.installed_only, self.unassigned_only):
             opts.addWidget(cb)
         opts.addStretch(1)
@@ -352,11 +458,16 @@ class AvailableModsPanel(QWidget):
                and not (self.installed_only.isChecked() and not self._catalog.installed(m))
                and not (self.unassigned_only.isChecked() and self._usage.get(m))]
         self.table.set_mods(ids, self._catalog, extra={m: ", ".join(self._usage.get(m, [])) for m in ids})
+        self.tag_filter.set_mods(ids, self._catalog)
         self._update_count()
         self.setEnabled(self._active)
 
     def _filter_changed(self, text: str) -> None:
         self.table.apply_filter(text)
+        self._update_count()
+
+    def _tags_changed(self, tags: set[str]) -> None:
+        self.table.set_tag_filter(tags)
         self._update_count()
 
     def _update_count(self) -> None:
@@ -419,6 +530,8 @@ class ModListEditor(QWidget):
         self.filter = QLineEdit(placeholderText="Filter…")
         self.filter.setClearButtonEnabled(True)
         self.filter.textChanged.connect(self.table.apply_filter)
+        self.tag_filter = TagFilterButton()
+        self.tag_filter.changed.connect(self.table.set_tag_filter)
         self.paste_btn = QPushButton("Paste ids / URLs…")
         self.paste_btn.setToolTip("Add mods that aren't in the list (Workshop URLs, ids, local @mod paths)")
         self.paste_btn.clicked.connect(lambda: self.add_ids(ask_mod_ids(self, "Add mods")))
@@ -431,8 +544,11 @@ class ModListEditor(QWidget):
         bottom.addWidget(self.remove_btn)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
+        filters = QHBoxLayout()
+        filters.addWidget(self.filter, 1)
+        filters.addWidget(self.tag_filter)
         lay.addWidget(self.title)
-        lay.addWidget(self.filter)
+        lay.addLayout(filters)
         lay.addWidget(self.table, 1)
         lay.addLayout(bottom)
 
@@ -447,6 +563,7 @@ class ModListEditor(QWidget):
     def refresh(self) -> None:
         if self._catalog is not None:
             self.table.set_mods(self._ids or [], self._catalog)
+            self.tag_filter.set_mods(self._ids or [], self._catalog)
 
     def add_ids(self, ids: list[str]) -> None:
         if self._ids is None:

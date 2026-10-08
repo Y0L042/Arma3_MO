@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime as _dt
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -63,6 +64,31 @@ def check_issues(mods: list[str], catalog: ModCatalog) -> tuple[list[str], dict[
         if lacking:
             deps[m] = lacking
     return missing, deps
+
+
+def _folder_name(mod_id: str) -> str:
+    return mod_id.split(":", 1)[1].rstrip("\\").rsplit("\\", 1)[-1].upper()
+
+
+def find_moved_local_mods(ids, catalog: ModCatalog) -> dict[str, str]:
+    """Local mod ids whose folder no longer exists -> id of the same ``@folder`` found elsewhere.
+
+    Candidates are the launcher's local mods (preferred) and ``catalog.local_folders``. Ambiguous
+    names are left alone.
+    """
+    known = {m for m, info in catalog.mods.items() if m.startswith("local:") and info.installed}
+    by_name: dict[str, set[str]] = {}
+    for mid in known | set(catalog.local_folders):
+        by_name.setdefault(_folder_name(mid), set()).add(mid)
+    moved = {}
+    for mid in dict.fromkeys(ids):
+        if not mid.startswith("local:") or mid in known or os.path.isdir(mid.split(":", 1)[1]):
+            continue
+        cands = by_name.get(_folder_name(mid), set()) - {mid}
+        cands = (cands & known) or cands
+        if len(cands) == 1:
+            moved[mid] = cands.pop()
+    return moved
 
 
 def plan_generate(lib: Library, catalog: ModCatalog, presets_dir: Path | None = None) -> GeneratePlan:

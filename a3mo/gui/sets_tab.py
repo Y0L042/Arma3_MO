@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..model import ModSet
-from .widgets import AvailableModsPanel, ModTable, ask_mod_ids
+from .widgets import AvailableModsPanel, ModTable, TagFilterButton, ask_mod_ids
 
 
 class SetsTab(QWidget):
@@ -44,6 +44,8 @@ class SetsTab(QWidget):
         self.set_mods.setToolTip("Drag rows to reorder (Ctrl+Up/Down) · Delete or drag to the right to remove · "
                                  "double-click opens the Workshop page")
         self.set_filter.textChanged.connect(self.set_mods.apply_filter)
+        self.set_tag_filter = TagFilterButton()
+        self.set_tag_filter.changed.connect(self.set_mods.set_tag_filter)
         self.set_mods.dropped.connect(self._add_mods)
         self.set_mods.reordered.connect(self._reorder)
         # Keep the name readable in this narrow pane: status is shown by colour, both in the tooltip.
@@ -68,7 +70,10 @@ class SetsTab(QWidget):
         ml.setContentsMargins(0, 0, 0, 0)
         ml.addWidget(self.set_title)
         ml.addWidget(self.used_by)
-        ml.addWidget(self.set_filter)
+        filters = QHBoxLayout()
+        filters.addWidget(self.set_filter, 1)
+        filters.addWidget(self.set_tag_filter)
+        ml.addLayout(filters)
         ml.addWidget(self.set_mods, 1)
         ml.addLayout(mb)
         ml.addWidget(self.notes)
@@ -131,6 +136,7 @@ class SetsTab(QWidget):
         self.used_by.setText(f"Used by {len(users)} config(s): {shown or '—'}" if s else "")
         self.used_by.setToolTip("\n".join(users))
         self.set_mods.set_mods(s.mods if s else [], self.main.catalog)
+        self.set_tag_filter.set_mods(s.mods if s else [], self.main.catalog)
         self.set_mods.setEnabled(s is not None)
         self.notes.blockSignals(True)
         self.notes.setPlainText(s.notes if s else "")

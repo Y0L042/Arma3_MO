@@ -131,3 +131,34 @@ def test_configs_tab_available_panels(app, tmp_path):
     tab.exclude_avail.remove_requested.emit(["steam:1"])
     tab.add_avail.remove_requested.emit(["steam:3"])
     assert cfg.exclude == [] and cfg.add == ["steam:9", "steam:2"] and w.dirty
+
+
+def test_tag_filter(app):
+    from a3mo.gui.widgets import UNTAGGED, AvailableModsPanel
+    cat = ModCatalog({m: ModInfo(m, f"Mod {m[-1]}", True) for m in IDS})
+    cat.apply_workshop(tags={"steam:1": ["Terrain"], "steam:2": ["Weapon", "Terrain"], "steam:3": ["Sound"]})
+    t = ModTable(reorderable=True, show_tags=True)
+    t.set_mods(IDS, cat)
+    assert t.item(1, t.col["Tags"]).text() == "Weapon, Terrain"
+    t.set_tag_filter({"Terrain"})
+    assert t.visible_ids() == ["steam:1", "steam:2"] and not t.in_order_view()
+    t.set_tag_filter({"Sound", UNTAGGED})
+    assert t.visible_ids() == ["steam:3", "steam:4"]
+    t.apply_filter("mod 4")
+    assert t.visible_ids() == ["steam:4"]
+    t.apply_filter("")
+    t.set_tag_filter(set())
+    assert t.visible_ids() == IDS and t.in_order_view()
+    t.apply_filter("weap")  # text filter also matches tags
+    assert t.visible_ids() == ["steam:2"]
+
+    panel = AvailableModsPanel()
+    panel.set_context(IDS, [], {}, cat)
+    menu = {a.data(): a for a in panel.tag_filter.menu().actions() if a.isCheckable()}
+    assert set(menu) == {"Terrain", "Weapon", "Sound", UNTAGGED}
+    menu["Weapon"].setChecked(True)
+    assert panel.table.visible_ids() == ["steam:2"] and panel.count.text() == "1 shown"
+    panel.refresh()  # rebuilding the menu keeps the selection
+    assert panel.tag_filter.selected() == {"Weapon"} and panel.table.visible_ids() == ["steam:2"]
+    panel.tag_filter.clear()
+    assert len(panel.table.visible_ids()) == 4
